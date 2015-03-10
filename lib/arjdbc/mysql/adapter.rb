@@ -390,6 +390,50 @@ module ArJdbc
       columns
     end
 
+    def initialize_type_map(m) # :nodoc:
+      super
+
+      register_class_with_limit m, %r(char)i, jdbc_mysql_string_class
+
+      m.register_type %r(tinytext)i,   ::ActiveRecord::Type::Text.new(limit: 2**8 - 1)
+      m.register_type %r(tinyblob)i,   ::ActiveRecord::Type::Binary.new(limit: 2**8 - 1)
+      m.register_type %r(text)i,       ::ActiveRecord::Type::Text.new(limit: 2**16 - 1)
+      m.register_type %r(blob)i,       ::ActiveRecord::Type::Binary.new(limit: 2**16 - 1)
+      m.register_type %r(mediumtext)i, ::ActiveRecord::Type::Text.new(limit: 2**24 - 1)
+      m.register_type %r(mediumblob)i, ::ActiveRecord::Type::Binary.new(limit: 2**24 - 1)
+      m.register_type %r(longtext)i,   ::ActiveRecord::Type::Text.new(limit: 2**32 - 1)
+      m.register_type %r(longblob)i,   ::ActiveRecord::Type::Binary.new(limit: 2**32 - 1)
+      m.register_type %r(^float)i,     ::ActiveRecord::Type::Float.new(limit: 24)
+      m.register_type %r(^double)i,    ::ActiveRecord::Type::Float.new(limit: 53)
+
+      register_integer_type m, %r(^bigint)i,    limit: 8
+      register_integer_type m, %r(^int)i,       limit: 4
+      register_integer_type m, %r(^mediumint)i, limit: 3
+      register_integer_type m, %r(^smallint)i,  limit: 2
+      register_integer_type m, %r(^tinyint)i,   limit: 1
+
+      m.alias_type %r(tinyint\(1\))i,  'boolean' if self.class.emulate_booleans?
+      m.alias_type %r(set)i,           'varchar'
+      m.alias_type %r(year)i,          'integer'
+      m.alias_type %r(bit)i,           'binary'
+
+      m.register_type(%r(enum)i) do |sql_type|
+        limit = sql_type[/^enum\((.+)\)/i, 1]
+                    .split(',').map{|enum| enum.strip.length - 2}.max
+        jdbc_mysql_string_class.new(limit: limit)
+      end
+    end if AR42
+
+    def register_integer_type(mapping, key, options) # :nodoc:
+      mapping.register_type(key) do |sql_type|
+        if /unsigned/i =~ sql_type
+          ::ActiveRecord::Type::UnsignedInteger.new(options)
+        else
+          ::ActiveRecord::Type::Integer.new(options)
+        end
+      end
+    end if AR42
+
     if defined? ::ActiveRecord::ConnectionAdapters::AbstractAdapter::SchemaCreation
 
     class SchemaCreation < ::ActiveRecord::ConnectionAdapters::AbstractAdapter::SchemaCreation
@@ -762,6 +806,26 @@ module ActiveRecord
       def self.emulate_booleans;  ::ArJdbc::MySQL.emulate_booleans?; end # native adapter
       def self.emulate_booleans=(emulate); ::ArJdbc::MySQL.emulate_booleans = emulate; end
 
+      class MysqlString < ::ActiveRecord::Type::String # :nodoc:
+        def type_cast_for_database(value)
+          case value
+            when true then "1"
+            when false then "0"
+            else super
+          end
+        end
+
+        private
+
+        def cast_value(value)
+          case value
+            when true then "1"
+            when false then "0"
+            else super
+          end
+        end
+      end if AR42
+
       class Column < JdbcColumn
         include ::ArJdbc::MySQL::Column
 
@@ -782,6 +846,10 @@ module ActiveRecord
 
       def jdbc_column_class
         Column
+      end
+
+      def jdbc_mysql_string_class
+        MysqlString
       end
 
     end
